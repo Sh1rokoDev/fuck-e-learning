@@ -459,13 +459,17 @@ const FontTools = {
 			const delta = dv.getInt16(deltaBase + s * 2);
 			const ro = dv.getUint16(rangeBase + s * 2);
 			if (start === 0xffff) continue;
+			// 段表给出的是「码点 → 字形索引」；字形索引 0 表示该码点未被字体覆盖。
+			// 集合里必须存码点本身，c + delta 在 ro === 0 时是字形索引，不能拿来当码点。
 			for (let c = start; c <= end; c++) {
+				let glyphId;
 				if (ro === 0) {
-					out.add((c + delta) & 0xffff);
+					glyphId = (c + delta) & 0xffff;
 				} else {
 					const gi = rangeBase + s * 2 + ro + (c - start) * 2;
-					if (gi + 1 < dv.byteLength && dv.getUint16(gi)) out.add((c + delta) & 0xffff);
+					glyphId = gi + 1 < dv.byteLength ? dv.getUint16(gi) : 0;
 				}
+				if (glyphId) out.add(c);
 			}
 		}
 	},
@@ -512,6 +516,8 @@ const FontTools = {
 		const out = [];
 		for (const ch of String(text)) {
 			const cp = ch.codePointAt(0);
+			// 文本拼接会带入分隔空格，字体若覆盖空白码点也不应作为探针
+			if (cp <= 0x20) continue;
 			if (cmap.has(cp) && !seen.has(ch)) {
 				seen.add(ch);
 				out.push(ch);

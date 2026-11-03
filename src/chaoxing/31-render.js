@@ -409,6 +409,55 @@ const QuestionRenderer = (function () {
 	}
 
 	/**
+	 * 用指定字体族与 @font-face 集渲染一段文本，返回位图数据。
+	 * 除 font-family / @font-face 外，两次调用的布局参数完全一致，
+	 * 因此位图差异只可能来自「字体是否真的生效」。
+	 */
+	async function renderProbeSvg(probeText, fontFamily, fontCss) {
+		const w = 300;
+		const h = 60;
+		const inner =
+			'<div xmlns="http://www.w3.org/1999/xhtml" style="margin:0;padding:0;' +
+			"width:" +
+			w +
+			"px;height:" +
+			h +
+			"px;background:#fff;color:#000;font-size:40px;line-height:60px;" +
+			"white-space:nowrap;font-family:" +
+			fontFamily +
+			';">' +
+			escapeXml(probeText) +
+			"</div>";
+		const svg =
+			'<svg xmlns="http://www.w3.org/2000/svg" width="' +
+			w +
+			'" height="' +
+			h +
+			'"><style type="text/css"><![CDATA[' +
+			fontCss +
+			"]]></style>" +
+			'<foreignObject x="0" y="0" width="' +
+			w +
+			'" height="' +
+			h +
+			'">' +
+			inner +
+			"</foreignObject></svg>";
+		const img = await loadImage(
+			"data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg),
+			8000,
+		);
+		const c = document.createElement("canvas");
+		c.width = w;
+		c.height = h;
+		const ctx = c.getContext("2d", { willReadFrequently: true });
+		ctx.fillStyle = "#fff";
+		ctx.fillRect(0, 0, w, h);
+		ctx.drawImage(img, 0, 0);
+		return ctx.getImageData(0, 0, w, h).data;
+	}
+
+	/**
 	 * 探针渲染：用与正式渲染完全相同的管线（native=SVG 内嵌字体 / canvas=顶层注册字体）
 	 * 渲染一段密文字符，再与系统字体渲染结果比较，判断混淆字体是否真的生效。
 	 */
@@ -421,56 +470,17 @@ const QuestionRenderer = (function () {
 			return FontTools.isFontEffective('"' + family + '"', probeText);
 		}
 
-		// native：走 SVG + foreignObject，验证内嵌字体确实参与排版
+		// native：同一段文本分别用「内嵌混淆字体」和「系统字体」渲染并比较位图。
+		// 混淆字体未生效时两者都会回退到同一个系统字体，位图一致，判为失败。
 		try {
-			const w = 300;
-			const h = 60;
-			const inner =
-				'<div xmlns="http://www.w3.org/1999/xhtml" style="margin:0;padding:0;' +
-				"width:" +
-				w +
-				"px;height:" +
-				h +
-				"px;background:#fff;color:#000;font-size:40px;line-height:60px;" +
-				"white-space:nowrap;font-family:'" +
-				family.replace(/'/g, "") +
-				"';\">" +
-				escapeXml(probeText) +
-				"</div>";
-			const svg =
-				'<svg xmlns="http://www.w3.org/2000/svg" width="' +
-				w +
-				'" height="' +
-				h +
-				'"><style type="text/css"><![CDATA[' +
-				buildFontCss(doc) +
-				"]]></style>" +
-				'<foreignObject x="0" y="0" width="' +
-				w +
-				'" height="' +
-				h +
-				'">' +
-				inner +
-				"</foreignObject></svg>";
-			const img = await loadImage(
-				"data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg),
-				8000,
-			);
-			const a = document.createElement("canvas");
-			a.width = w;
-			a.height = h;
-			const actx = a.getContext("2d", { willReadFrequently: true });
-			actx.fillStyle = "#fff";
-			actx.fillRect(0, 0, w, h);
-			actx.drawImage(img, 0, 0);
-			const da = actx.getImageData(0, 0, w, h).data;
-
-			const sys = FontTools._probeCanvas('"Microsoft YaHei"', probeText);
+			const fallback = "'Microsoft YaHei'";
+			const secret = "'" + family.replace(/'/g, "") + "', " + fallback;
+			const a = await renderProbeSvg(probeText, secret, buildFontCss(doc));
+			const b = await renderProbeSvg(probeText, fallback, "");
 			let diff = 0;
-			for (let i = 0; i < da.length; i += 4) {
-				if (Math.abs(da[i] - sys[i]) > 60) diff++;
+			for (let i = 0; i < a.length; i += 4) {
+				if (Math.abs(a[i] - b[i]) > 60) diff++;
 			}
-			// 只要渲染出的字形与系统字体有显著差异，就说明混淆字体确实生效
 			return diff > 30;
 		} catch (e) {
 			return false;
